@@ -1,0 +1,173 @@
+---
+title: "STA206_Code"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+#Read in data
+bodyfat <- read.table("bodyfat.txt", header=F)
+colnames(bodyfat) <- c("density","bodyfat","age","weight","height","neck","chest","abdomen",
+                       "hip", "thigh", "knee", "ankle", "bicep", "forearm","wrist")
+#Remove height outlier (imputation error)
+bodyfat <- bodyfat[-which(bodyfat$height == min(bodyfat$height)),]
+bodyfat <- bodyfat[bodyfat$bodyfat > 1,]
+
+#Train and test sets
+set.seed(1239)
+train_index <- sort(sample(1:nrow(bodyfat),as.integer(nrow(bodyfat)*0.7),replace=F))
+train <- bodyfat[train_index,]
+test <- bodyfat[-train_index,]
+
+#Exploratory plots
+hist(bodyfat$bodyfat, main="Figure 1: Histogram of body fat percentage", xlab = "Body fat percentage")
+hist(bodyfat$age)
+hist(bodyfat$height)
+hist(bodyfat$weight)
+hist(bodyfat$neck)
+hist(bodyfat$chest)
+hist(bodyfat$abdomen)
+hist(bodyfat$hip)
+hist(bodyfat$thigh)
+hist(bodyfat$knee)
+hist(bodyfat$ankle)
+hist(bodyfat$bicep)
+hist(bodyfat$forearm)
+hist(bodyfat$wrist)
+
+sapply(bodyfat, summary)
+
+panel_cor <- function(x,y) {
+  par(usr = c(0, 1, 0, 1))
+  r <- round(cor(x, y, use = "complete.obs"), 2)
+  txt <- paste0("R = ", r)
+  cex_cor <- 2/strwidth(txt)
+  text(0.5, 0.5, txt, cex = cex_cor)
+}
+
+pairs(train[,c("bodyfat", "weight","height","neck","chest","abdomen",
+                       "hip", "thigh", "knee", "ankle", "bicep", "forearm","wrist")],
+      lower.panel = panel_cor, cex.labels = 1.5)
+```
+
+```{r}
+#Exploratory full model fit
+fit_all <- lm(bodyfat ~ . - density, data = bodyfat)
+
+summary(fit_all)
+
+plot(fit_all)
+
+car::vif(fit_all)
+
+MASS::boxcox(fit_all)
+```
+
+```{r}
+#Best subset selection procedure
+best_set <- leaps::regsubsets(bodyfat ~ . - density, data=train, nbest=1, nvmax=13, method="exhaustive")
+bestsub <- summary(best_set)
+
+n <- nrow(train)
+p_m <- rowSums(bestsub$which)
+ssto <- sum((bodyfat$bodyfat - mean(bodyfat$bodyfat))^2)
+sse <- (1-bestsub$rsq)*ssto
+aic <- n*log(sse/n)+2*p_m
+bic <- n*log(sse/n)+log(n)*p_m
+
+model_comp <- cbind(bestsub$which, sse, bestsub$rsq, bestsub$adjr2, bestsub$cp, bic, aic)
+colnames(model_comp) <- c(colnames(bestsub$which), "sse","R^2","R^2_a","Cp","bic", "aic")
+
+round(model_comp, 2)
+```
+
+```{r}
+#Candidate models
+candidate1 <- lm(bodyfat ~ weight + abdomen, data=train)
+candidate2 <- lm(bodyfat ~ age + height + chest + abdomen + wrist, data=train)
+candidate3 <- lm(bodyfat ~ age + height + chest + abdomen + wrist + hip + ankle + forearm, data=train)
+
+#Evaluating candidate models
+summary(candidate1)
+summary(candidate2)
+summary(candidate3)
+plot(candidate1)
+plot(candidate2)
+plot(candidate3)
+anova(candidate1)
+anova(candidate2)
+anova(candidate3)
+car::vif(candidate1)
+car::vif(candidate2)
+car::vif(candidate3)
+MASS::boxcox(candidate1)
+MASS::boxcox(candidate2)
+MASS::boxcox(candidate3)
+
+#MSPE calculation
+test_fit1 <- lm(bodyfat ~ weight + abdomen, data=test)
+summary(test_fit1)
+mean((test$bodyfat - predict(candidate1, test[,-c(1,2)]))^2)
+sum(candidate1$residuals^2)/nrow(train)
+
+test_fit2 <- lm(bodyfat ~ age + height + chest + abdomen + wrist, data=test)
+summary(test_fit2)
+mean((test$bodyfat - predict(candidate2, test[,-c(1,2)]))^2)
+sum(candidate2$residuals^2)/nrow(train)
+
+test_fit3 <- lm(bodyfat ~ age + height + chest + abdomen + wrist + hip + ankle + forearm, data=test)
+summary(test_fit3)
+mean((test$bodyfat - predict(candidate3, test[,-c(1,2)]))^2)
+sum(candidate3$residuals^2)/nrow(train)
+```
+
+
+```{r}
+#Interaction terms model
+full_mod <- lm(bodyfat ~ (. - density)^2, data=train)
+none_mod <- lm(bodyfat ~ 1, data=train)
+
+candidate4 <- MASS::stepAIC(none_mod, scope=list(upper=full_mod, lower = ~1), direction="both", k=2, trace=F)
+summary(candidate4)
+car::vif(candidate4)
+anova(candidate4)
+plot(candidate4)
+
+n*log((1-summary(candidate4)$r.squared)*ssto/n)+2*6
+n*log((1-summary(candidate4)$r.squared)*ssto/n)+log(n)*6
+olsrr::ols_mallows_cp(candidate4, full_mod)
+
+#MSPE
+test_int <- lm(bodyfat ~ weight + abdomen + height + wrist + weight:abdomen, data=train)
+summary(test_int)
+mean((test$bodyfat - predict(candidate4, test[,-c(1,2)]))^2)
+sum(candidate4$residuals^2)/nrow(train)
+```
+
+```{r}
+#Final model summary and diagnostics
+final_model <- lm(bodyfat ~ weight + abdomen, data=bodyfat)
+summary(final_model)
+
+par(mfrow=c(2,2))
+plot(final_model, which=c(1,2,5))
+MASS::boxcox(final_model)
+title("Box-Cox Procedure", cex.main=1)
+car::vif(final_model)
+
+#Seeing effect of influential point
+no_39 <- lm(bodyfat ~ weight + abdomen, data=bodyfat[-39,])
+percent_change <- abs((final_model$fitted.values - predict(no_39, bodyfat[,-c(1,2)]))/final_model$fitted.values)*100
+summary(percent_change)
+plot(final_model$fitted.values, predict(no_39, bodyfat[,-c(1,2)]))
+abline(0,1)
+
+example <- data.frame("weight" = 150, "abdomen" = 81.5)
+predict(final_model, example, interval = "confidence")
+```
